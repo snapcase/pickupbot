@@ -59,16 +59,62 @@ defmodule PickupBot.Servers.Pickup do
         Process.send_after(self(), {:start_afk_check, 0}, 0)
       end
 
-      {:reply, :ok, %{state | players: new_players}}
+      # Send message to announce player count change
+      # Only announce if player count actually changed
+      updated_state =
+        if MapSet.size(new_players) != MapSet.size(state.players) do
+          # Cancel any existing timer
+          if state[:announce_timer] do
+            Process.cancel_timer(state[:announce_timer])
+          end
+
+          # Schedule new announcement with 750ms delay
+          timer_ref =
+            Process.send_after(self(), {:announce_player_count, MapSet.size(new_players)}, 750)
+
+          Map.put(state, :announce_timer, timer_ref)
+        else
+          state
+        end
+
+      {:reply, :ok, %{updated_state | players: new_players}}
     end
   end
 
+  # TODO: players should be able to remove pending the AFK stage
+  #       currently the afk check loop will just continue when the player count != @maxplayers
   def handle_call({:remove, player_id}, _from, state) do
-    {:reply, :ok, Map.delete(state, player_id)}
+    new_players = MapSet.delete(state.players, player_id)
+
+    updated_state =
+      if MapSet.size(new_players) != MapSet.size(state.players) do
+        # Cancel any existing timer
+        if state[:announce_timer] do
+          Process.cancel_timer(state[:announce_timer])
+        end
+
+        # Schedule new announcement with 750ms delay
+        timer_ref =
+          Process.send_after(self(), {:announce_player_count, MapSet.size(new_players)}, 750)
+
+        Map.put(state, :announce_timer, timer_ref)
+      else
+        state
+      end
+
+    {:reply, :ok, %{updated_state | players: new_players}}
   end
 
   def handle_call(:reset, _from, state) do
     {:reply, :ok, %{state | players: MapSet.new()}}
+  end
+
+  def handle_info({:announce_player_count, player_count}, state) do
+    Logger.info("Player count updated: #{player_count}/#{@maxplayers}")
+
+    # TODO: Add logic to announce player count (e.g., send Discord message)
+
+    {:noreply, state}
   end
 
   def handle_info({:start_afk_check, attempt}, state) do
