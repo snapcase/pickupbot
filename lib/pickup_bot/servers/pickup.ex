@@ -141,7 +141,7 @@ defmodule PickupBot.Servers.Pickup do
         remaining = 80 - attempt * 20
 
         remaining_humanized = humanize_seconds(remaining)
-        afk_players = afk_players(state.players)
+        {_active_players, afk_players} = split_active_afk(state.players)
 
         Logger.info(
           "AFK check attempt #{attempt + 1}: Not all players present. Scheduling next check. Time remaining: #{remaining_humanized}. AFK players: #{inspect(afk_players)}"
@@ -153,9 +153,7 @@ defmodule PickupBot.Servers.Pickup do
         Logger.info("AFK check timed out after 80 seconds.")
 
         # Remove AFK players and reset if not enough players remain
-        all_players = MapSet.to_list(state.players)
-        afk_players = afk_players(state.players)
-        active_players = all_players -- afk_players
+        {active_players, afk_players} = split_active_afk(state.players)
         new_players = MapSet.new(active_players)
 
         Logger.info("Removing AFK players: #{inspect(afk_players)}")
@@ -191,14 +189,6 @@ defmodule PickupBot.Servers.Pickup do
     DateTime.diff(DateTime.utc_now(), timestamp, :second) < 300
   end
 
-  defp afk_players(players) do
-    players
-    |> MapSet.to_list()
-    |> ActivityTracker.get_timestamps()
-    |> Enum.reject(&active_5m?/1)
-    |> Enum.map(fn {player_id, _} -> player_id end)
-  end
-
   defp humanize_seconds(seconds) do
     minutes = div(seconds, 60)
     secs = rem(seconds, 60)
@@ -216,5 +206,19 @@ defmodule PickupBot.Servers.Pickup do
 
   defp cancel_timer(timer_ref) do
     if timer_ref, do: Process.cancel_timer(timer_ref)
+  end
+
+  defp split_active_afk(players) do
+    timestamps =
+      players
+      |> MapSet.to_list()
+      |> PickupBot.Servers.ActivityTracker.get_timestamps()
+
+    {active, afk} = Enum.split_with(timestamps, &active_5m?/1)
+
+    {
+      Enum.map(active, fn {player_id, _} -> player_id end),
+      Enum.map(afk, fn {player_id, _} -> player_id end)
+    }
   end
 end
