@@ -10,8 +10,6 @@ defmodule PickupBot.Servers.Pickup do
 
   @maxplayers 8
 
-  # TODO: make these configurable
-  @afk_interval 20
   # @channel 1_412_476_637_479_436_288
   # @maps [
   #   "cpm21",
@@ -42,7 +40,12 @@ defmodule PickupBot.Servers.Pickup do
   # Server (callbacks)
 
   def init(_arg) do
-    {:ok, %{players: MapSet.new()}}
+    {:ok,
+     %{
+       players: MapSet.new(),
+       announce_timer: nil,
+       afk_timer: nil
+     }}
   end
 
   def handle_call({:add, player_id}, _from, state) do
@@ -64,9 +67,7 @@ defmodule PickupBot.Servers.Pickup do
       updated_state =
         if MapSet.size(new_players) != MapSet.size(state.players) do
           # Cancel any existing timer
-          if state[:announce_timer] do
-            Process.cancel_timer(state[:announce_timer])
-          end
+          cancel_timer(state.announce_timer)
 
           # Schedule new announcement with 750ms delay
           timer_ref =
@@ -81,17 +82,13 @@ defmodule PickupBot.Servers.Pickup do
     end
   end
 
-  # TODO: players should be able to remove pending the AFK stage
-  #       currently the afk check loop will just continue when the player count != @maxplayers
   def handle_call({:remove, player_id}, _from, state) do
     new_players = MapSet.delete(state.players, player_id)
 
     updated_state =
       if MapSet.size(new_players) != MapSet.size(state.players) do
         # Cancel any existing timer
-        if state[:announce_timer] do
-          Process.cancel_timer(state[:announce_timer])
-        end
+        cancel_timer([state.announce_timer, state.afk_timer])
 
         # Schedule new announcement with 750ms delay
         timer_ref =
@@ -127,7 +124,7 @@ defmodule PickupBot.Servers.Pickup do
     else
       # 4 attempts * 20 seconds = 80 seconds
       if attempt < 4 do
-        remaining = 80 - attempt * @afk_interval
+        remaining = 80 - attempt * 20
 
         remaining_humanized = humanize_seconds(remaining)
         afk_players = afk_players(state.players)
@@ -136,8 +133,8 @@ defmodule PickupBot.Servers.Pickup do
           "AFK check attempt #{attempt + 1}: Not all players present. Scheduling next check. Time remaining: #{remaining_humanized}. AFK players: #{inspect(afk_players)}"
         )
 
-        Process.send_after(self(), {:start_afk_check, attempt + 1}, 20_000)
-        {:noreply, state}
+        timer_ref = Process.send_after(self(), {:start_afk_check, attempt + 1}, 20_000)
+        {:noreply, %{state | afk_timer: timer_ref}}
       else
         Logger.info("AFK check timed out after 80 seconds.")
 
@@ -149,7 +146,10 @@ defmodule PickupBot.Servers.Pickup do
 
         Logger.info("Removing AFK players: #{inspect(afk_players)}")
 
-        {:noreply, %{state | players: new_players}}
+        timer_ref =
+          Process.send_after(self(), {:announce_player_count, MapSet.size(new_players)}, 750)
+
+        {:noreply, %{state | players: new_players, announce_timer: timer_ref}}
       end
     end
   end
@@ -190,5 +190,13 @@ defmodule PickupBot.Servers.Pickup do
       minutes > 0 -> "#{minutes} minute"
       true -> "#{secs} seconds"
     end
+  end
+
+  defp cancel_timer(timer_ref) when is_list(timer_ref) do
+    Enum.each(timer_ref, &cancel_timer/1)
+  end
+
+  defp cancel_timer(timer_ref) do
+    if timer_ref, do: Process.cancel_timer(timer_ref)
   end
 end
