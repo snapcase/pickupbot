@@ -58,32 +58,30 @@ defmodule PickupBot.Servers.Pickup do
 
       if MapSet.size(new_players) == @maxplayers do
         Logger.info("Pickup ready! Players: #{inspect(MapSet.to_list(new_players))}")
-
         # Send message to initiate AFK handler
         Process.send_after(self(), {:start_afk_check, 0}, 0)
+        # Do NOT announce player count when reaching maxplayers
+        {:reply, :ok, %{state | players: new_players}}
+      else
+        # Only announce if player count actually changed and not at maxplayers
+        updated_state =
+          if MapSet.size(new_players) != MapSet.size(state.players) do
+            cancel_timer(state.announce_timer)
+
+            timer_ref =
+              Process.send_after(
+                self(),
+                {:announce_player_count, MapSet.size(new_players), :up},
+                750
+              )
+
+            Map.put(state, :announce_timer, timer_ref)
+          else
+            state
+          end
+
+        {:reply, :ok, %{updated_state | players: new_players}}
       end
-
-      # Send message to announce player count change
-      # Only announce if player count actually changed
-      updated_state =
-        if MapSet.size(new_players) != MapSet.size(state.players) do
-          # Cancel any existing timer
-          cancel_timer(state.announce_timer)
-
-          # Schedule new announcement with 750ms delay
-          timer_ref =
-            Process.send_after(
-              self(),
-              {:announce_player_count, MapSet.size(new_players), :up},
-              750
-            )
-
-          Map.put(state, :announce_timer, timer_ref)
-        else
-          state
-        end
-
-      {:reply, :ok, %{updated_state | players: new_players}}
     end
   end
 
