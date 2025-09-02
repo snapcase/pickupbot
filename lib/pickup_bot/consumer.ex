@@ -3,12 +3,17 @@ defmodule PickupBot.Consumer do
 
   require Logger
 
-  alias Nostrum.Api.Message
+  alias PickupBot.Servers.Pickup
 
   def handle_event({:MESSAGE_CREATE, msg, _ws_state}) do
+    PickupBot.Servers.ActivityTracker.track_msg(msg.author.id)
+
     case msg.content do
-      "ping!" ->
-        Message.create(msg.channel_id, "I copy and pasted this code")
+      "++" ->
+        Pickup.add(msg.author.id)
+
+      "--" ->
+        Pickup.remove(msg.author.id)
 
       _ ->
         :ignore

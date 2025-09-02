@@ -22,7 +22,9 @@ defmodule PickupBot.Application do
     }
 
     children = [
-      {Nostrum.Bot, bot_options}
+      {Nostrum.Bot, bot_options},
+      PickupBot.Servers.Pickup,
+      PickupBot.Servers.ActivityTracker
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
