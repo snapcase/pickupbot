@@ -7,10 +7,11 @@ defmodule PickupBot.Servers.Pickup do
   require Logger
 
   alias PickupBot.Servers.ActivityTracker
+  alias Nostrum.Api.Message
 
   @maxplayers 8
 
-  # @channel 1_412_476_637_479_436_288
+  @channel 1_412_476_637_479_436_288
   # @maps [
   #   "cpm21",
   #   "cpm4a",
@@ -71,7 +72,11 @@ defmodule PickupBot.Servers.Pickup do
 
           # Schedule new announcement with 750ms delay
           timer_ref =
-            Process.send_after(self(), {:announce_player_count, MapSet.size(new_players)}, 750)
+            Process.send_after(
+              self(),
+              {:announce_player_count, MapSet.size(new_players), :up},
+              750
+            )
 
           Map.put(state, :announce_timer, timer_ref)
         else
@@ -92,7 +97,11 @@ defmodule PickupBot.Servers.Pickup do
 
         # Schedule new announcement with 750ms delay
         timer_ref =
-          Process.send_after(self(), {:announce_player_count, MapSet.size(new_players)}, 750)
+          Process.send_after(
+            self(),
+            {:announce_player_count, MapSet.size(new_players), :down},
+            750
+          )
 
         Map.put(state, :announce_timer, timer_ref)
       else
@@ -106,10 +115,17 @@ defmodule PickupBot.Servers.Pickup do
     {:reply, :ok, %{state | players: MapSet.new()}}
   end
 
-  def handle_info({:announce_player_count, player_count}, state) do
+  def handle_info({:announce_player_count, player_count, direction}, state) do
+    # TODO: These are hardcoded to emojis on the dev bot, won't work elsewhere.
+    emoji =
+      case direction do
+        :up -> "<:up:1412542359807332412>"
+        :down -> "<:down:1412542407748227183>"
+      end
+
     Logger.info("Player count updated: #{player_count}/#{@maxplayers}")
 
-    # TODO: Add logic to announce player count (e.g., send Discord message)
+    Message.create(@channel, "**TDM** [ **#{player_count}** / **#{@maxplayers}**#{emoji}]")
 
     {:noreply, state}
   end
@@ -147,7 +163,11 @@ defmodule PickupBot.Servers.Pickup do
         Logger.info("Removing AFK players: #{inspect(afk_players)}")
 
         timer_ref =
-          Process.send_after(self(), {:announce_player_count, MapSet.size(new_players)}, 750)
+          Process.send_after(
+            self(),
+            {:announce_player_count, MapSet.size(new_players), :down},
+            750
+          )
 
         {:noreply, %{state | players: new_players, announce_timer: timer_ref}}
       end
