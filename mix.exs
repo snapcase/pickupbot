@@ -21,6 +21,9 @@ defmodule PickupBot.MixProject do
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
-    [{:nostrum, github: "Kraigie/nostrum"}]
+    [
+      {:nosedrum, github: "jchristgit/nosedrum"},
+      {:nostrum, github: "Kraigie/nostrum", override: true}
+    ]
   end
 end
