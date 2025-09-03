@@ -58,9 +58,13 @@ defmodule PickupBot.Servers.Pickup do
 
       if MapSet.size(new_players) == @maxplayers do
         Logger.info("Pickup ready! Players: #{inspect(MapSet.to_list(new_players))}")
+
         # Send message to initiate AFK handler
         Process.send_after(self(), {:start_afk_check, 0}, 0)
+
         # Do NOT announce player count when reaching maxplayers
+        cancel_timer(state.announce_timer)
+
         {:reply, :ok, %{state | players: new_players}}
       else
         # Only announce if player count actually changed and not at maxplayers
@@ -123,7 +127,7 @@ defmodule PickupBot.Servers.Pickup do
 
     Logger.info("Player count updated: #{player_count}/#{@maxplayers}")
 
-    Message.create(@channel, "**TDM** [ **#{player_count}** / **#{@maxplayers}**#{emoji}]")
+    Message.create(@channel, "**tdm** [ **#{player_count}** / **#{@maxplayers}**#{emoji}]")
 
     {:noreply, state}
   end
@@ -141,11 +145,31 @@ defmodule PickupBot.Servers.Pickup do
         remaining = 80 - attempt * 20
 
         remaining_humanized = humanize_seconds(remaining)
-        {_active_players, afk_players} = split_active_afk(state.players)
+
+        {active_players, afk_players} = split_active_afk(state.players)
 
         Logger.info(
           "AFK check attempt #{attempt + 1}: Not all players present. Scheduling next check. Time remaining: #{remaining_humanized}. AFK players: #{inspect(afk_players)}"
         )
+
+        ready_players =
+          active_players
+          |> Enum.map(&"`#{Nostrum.Cache.UserCache.get!(&1).username}`")
+          |> Enum.join(", ")
+
+        not_ready_players =
+          afk_players
+          |> Enum.map(&"<@#{&1}>")
+          |> Enum.join(", ")
+
+        msg = ~s"""
+        **tdm** is about to start
+        Ready players: #{ready_players}
+        Please send a message to ready up: #{not_ready_players}
+        **#{remaining_humanized}** left until the pickup gets aborted.
+        """
+
+        Message.create(@channel, msg)
 
         timer_ref = Process.send_after(self(), {:start_afk_check, attempt + 1}, 20_000)
         {:noreply, %{state | afk_timer: timer_ref}}
@@ -157,6 +181,8 @@ defmodule PickupBot.Servers.Pickup do
         new_players = MapSet.new(active_players)
 
         Logger.info("Removing AFK players: #{inspect(afk_players)}")
+
+        Message.create(@channel, "**tdm** aborted because players are missing.")
 
         timer_ref =
           Process.send_after(
