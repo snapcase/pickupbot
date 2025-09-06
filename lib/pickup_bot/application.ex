@@ -24,7 +24,9 @@ defmodule PickupBot.Application do
     children = [
       {Nostrum.Bot, bot_options},
       PickupBot.Servers.Pickup,
-      PickupBot.Servers.ActivityTracker
+      PickupBot.Servers.ActivityTracker,
+      PickupBot.Servers.MessageServer,
+      {DynamicSupervisor, name: PickupBot.DynamicSupervisor, strategy: :one_for_one}
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
