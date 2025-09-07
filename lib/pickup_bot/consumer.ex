@@ -15,6 +15,9 @@ defmodule PickupBot.Consumer do
       "--" ->
         Pickup.remove(msg.author.id)
 
+      "??" ->
+        Pickup.who()
+
       _ ->
         :ignore
     end

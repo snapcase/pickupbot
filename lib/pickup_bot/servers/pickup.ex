@@ -27,6 +27,10 @@ defmodule PickupBot.Servers.Pickup do
     GenServer.call(__MODULE__, {:remove, player_id})
   end
 
+  def who do
+    GenServer.call(__MODULE__, :who)
+  end
+
   def map(name) do
     GenServer.call(__MODULE__, {:map, name})
   end
@@ -115,6 +119,21 @@ defmodule PickupBot.Servers.Pickup do
 
       {:reply, :ok, %{updated_state | players: new_players}}
     end
+  end
+
+  def handle_call(:who, _from, state) do
+    count = MapSet.size(state.players)
+
+    players =
+      MapSet.to_list(state.players)
+      |> Enum.map(&"`#{find_username(&1)}`")
+      |> Enum.join(", ")
+
+    msg = "**tdm** [ **#{count}** / **#{@maxplayers}** ]: #{players}"
+
+    Message.create(@channel, msg)
+
+    {:reply, msg, state}
   end
 
   def handle_call(:reset, _from, state) do
