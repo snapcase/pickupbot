@@ -12,15 +12,6 @@ defmodule PickupBot.Servers.Pickup do
   @maxplayers 8
 
   @channel 1_412_476_637_479_436_288
-  # @maps [
-  #   "cpm21",
-  #   "cpm4a",
-  #   "cpm18r",
-  #   "ospdm5a",
-  #   "avrdm1b",
-  #   "cpm27",
-  #   "cpm26"
-  # ]
 
   # Client
 
@@ -36,7 +27,12 @@ defmodule PickupBot.Servers.Pickup do
     GenServer.call(__MODULE__, {:remove, player_id})
   end
 
+  def map(name) do
+    GenServer.call(__MODULE__, {:map, name})
+  end
+
   def reset, do: GenServer.call(__MODULE__, :reset)
+  def test, do: for(i <- 1..7, do: PickupBot.Servers.Pickup.add(i))
 
   # Server (callbacks)
 
@@ -45,7 +41,9 @@ defmodule PickupBot.Servers.Pickup do
      %{
        players: MapSet.new(),
        announce_timer: nil,
-       afk_timer: nil
+       afk_timer: nil,
+       paused: false,
+       map: nil
      }}
   end
 
@@ -76,7 +74,7 @@ defmodule PickupBot.Servers.Pickup do
               Process.send_after(
                 self(),
                 {:announce_player_count, MapSet.size(new_players), :up},
-                750
+                500
               )
 
             Map.put(state, :announce_timer, timer_ref)
@@ -90,31 +88,43 @@ defmodule PickupBot.Servers.Pickup do
   end
 
   def handle_call({:remove, player_id}, _from, state) do
-    new_players = MapSet.delete(state.players, player_id)
+    if state.paused do
+      Logger.info("Ignoring removal of player #{player_id} while paused.")
 
-    updated_state =
-      if MapSet.size(new_players) != MapSet.size(state.players) do
-        # Cancel any existing timer
-        cancel_timer([state.announce_timer, state.afk_timer])
+      {:reply, :ok, state}
+    else
+      new_players = MapSet.delete(state.players, player_id)
 
-        # Schedule new announcement with 750ms delay
-        timer_ref =
-          Process.send_after(
-            self(),
-            {:announce_player_count, MapSet.size(new_players), :down},
-            750
-          )
+      updated_state =
+        if MapSet.size(new_players) != MapSet.size(state.players) do
+          # Cancel any existing timer
+          cancel_timer([state.announce_timer, state.afk_timer])
 
-        Map.put(state, :announce_timer, timer_ref)
-      else
-        state
-      end
+          # Schedule new announcement with 500ms delay
+          timer_ref =
+            Process.send_after(
+              self(),
+              {:announce_player_count, MapSet.size(new_players), :down},
+              500
+            )
 
-    {:reply, :ok, %{updated_state | players: new_players}}
+          Map.put(state, :announce_timer, timer_ref)
+        else
+          state
+        end
+
+      {:reply, :ok, %{updated_state | players: new_players}}
+    end
   end
 
   def handle_call(:reset, _from, state) do
     {:reply, :ok, %{state | players: MapSet.new()}}
+  end
+
+  def handle_call({:map, name}, _from, state) do
+    Logger.info("received map from map_vote server")
+
+    {:reply, :ok, %{state | map: name}}
   end
 
   def handle_info({:announce_player_count, player_count, direction}, state) do
@@ -136,9 +146,25 @@ defmodule PickupBot.Servers.Pickup do
     if all_present?(state.players) do
       Logger.info("All players are present. AFK check complete.")
 
-      Process.send_after(self(), {:start_map_vote, MapSet.to_list(state.players)}, 0)
+      # Spawn a dynamic map_vote GenServer and transfer control
+      {:ok, map_vote_pid} =
+        DynamicSupervisor.start_child(
+          PickupBot.DynamicSupervisor,
+          {PickupBot.Servers.MapVote,
+           %{
+             players: MapSet.to_list(state.players),
+             pickup_pid: self(),
+             channel_id: @channel
+           }}
+        )
 
-      {:noreply, state}
+      # Monitor the map_vote process, when it exits the game may start.
+      Process.monitor(map_vote_pid)
+
+      Logger.info("Started map vote process: #{inspect(map_vote_pid)}")
+
+      # Pause any further processing of messages until MapVote completes
+      {:noreply, Map.put(state, :paused, true)}
     else
       # 4 attempts * 20 seconds = 80 seconds
       if attempt < 4 do
@@ -154,7 +180,7 @@ defmodule PickupBot.Servers.Pickup do
 
         ready_players =
           active_players
-          |> Enum.map(&"`#{Nostrum.Cache.UserCache.get!(&1).username}`")
+          |> Enum.map(&"`#{find_username(&1)}`")
           |> Enum.join(", ")
 
         not_ready_players =
@@ -188,7 +214,7 @@ defmodule PickupBot.Servers.Pickup do
           Process.send_after(
             self(),
             {:announce_player_count, MapSet.size(new_players), :down},
-            750
+            500
           )
 
         {:noreply, %{state | players: new_players, announce_timer: timer_ref}}
@@ -196,13 +222,42 @@ defmodule PickupBot.Servers.Pickup do
     end
   end
 
-  def handle_info({:start_map_vote, _players}, state) do
-    Logger.info("Reached a state of all players ready, initiating map vote!")
+  def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
+    Logger.info("MapVote process exited with reason: #{reason}, resuming normal operation.")
 
-    # we will keep the player state until this completes
-    # once it's done we can reset the state so that a new pickup can start
+    # TODO: temporary random output for team assignment
+    {team_red, team_blue} =
+      state.players
+      |> MapSet.to_list()
+      |> Enum.shuffle()
+      |> Enum.split(4)
 
-    {:noreply, state}
+    msg = ~s"""
+    **tdm** pickup started
+
+    Team Red
+    #{Enum.map_join(team_red, ", ", &"<@#{&1}>")}
+    Team Blue
+    #{Enum.map_join(team_blue, ", ", &"<@#{&1}>")}
+
+    Map: **#{state.map}**
+    IP: **de.snapcase.net:27963** Password: **pickup**
+    """
+
+    Message.create(@channel, msg)
+
+    # Reset state to allow new signups
+    {:noreply, %{state | paused: false, players: MapSet.new()}}
+  end
+
+  defp find_username(id) do
+    case Nostrum.Cache.UserCache.get(id) do
+      {:ok, user} ->
+        user.username
+
+      {:error, :user_not_found} ->
+        "Unknown User"
+    end
   end
 
   defp all_present?(players) do

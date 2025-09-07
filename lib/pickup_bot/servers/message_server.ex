@@ -23,6 +23,10 @@ defmodule PickupBot.Servers.MessageServer do
     GenServer.cast(__MODULE__, {:delete, channel_id, msg_id})
   end
 
+  def edit(msg, content) do
+    GenServer.cast(__MODULE__, {:update, msg, content})
+  end
+
   # Server (callbacks)
 
   @impl true
@@ -78,6 +82,15 @@ defmodule PickupBot.Servers.MessageServer do
       end)
 
     {:noreply, %{state | messages: messages}}
+  end
+
+  @impl true
+  def handle_cast({:update, msg, content}, state) do
+    Logger.info("Updating message with id: #{msg.id} in channel: #{msg.channel_id}")
+
+    Message.edit(msg, content)
+
+    {:noreply, state}
   end
 
   @impl true
