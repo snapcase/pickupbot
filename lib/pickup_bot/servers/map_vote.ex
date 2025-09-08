@@ -110,49 +110,59 @@ defmodule PickupBot.Servers.MapVote do
     Logger.info("received INTERACTION_CREATE event")
 
     user_id = interaction.user.id
-    map = String.replace_prefix(interaction.data.custom_id, "btn_map_", "")
 
-    # Get user's actions for this map
-    user_actions = Map.get(state.vote_actions, user_id, %{})
-    action = Map.get(user_actions, map, nil)
+    if eligible_to_vote?(user_id, state) do
+      map = String.replace_prefix(interaction.data.custom_id, "btn_map_", "")
 
-    new_state =
-      if action == :voted do
-        # Already voted, allow one unvote
-        Logger.info("User #{user_id} unvoted map #{map}")
+      # Get user's actions for this map
+      user_actions = Map.get(state.vote_actions, user_id, %{})
+      action = Map.get(user_actions, map, nil)
 
-        Nostrum.Api.Interaction.create_response(interaction.id, interaction.token, %{type: 6})
-
-        votes = Map.update(state.votes, map, [], fn voters -> List.delete(voters, user_id) end)
-        vote_actions = Map.put(state.vote_actions, user_id, Map.put(user_actions, map, :unvoted))
-
-        %{state | votes: votes, vote_actions: vote_actions}
-      else
-        if action == :unvoted do
-          # Already unvoted, ignore further actions
-          Logger.info("User #{user_id} already unvoted map #{map}, ignoring.")
+      new_state =
+        if action == :voted do
+          # Already voted, allow one unvote
+          Logger.info("User #{user_id} unvoted map #{map}")
 
           Nostrum.Api.Interaction.create_response(interaction.id, interaction.token, %{type: 6})
 
-          state
-        else
-          # First vote
-          Logger.info("User #{user_id} voted map #{map}")
+          votes = Map.update(state.votes, map, [], fn voters -> List.delete(voters, user_id) end)
 
-          Nostrum.Api.Interaction.create_response(interaction.id, interaction.token, %{type: 6})
-
-          votes =
-            Map.update(state.votes, map, [user_id], fn voters ->
-              [user_id | voters]
-            end)
-
-          vote_actions = Map.put(state.vote_actions, user_id, Map.put(user_actions, map, :voted))
+          vote_actions =
+            Map.put(state.vote_actions, user_id, Map.put(user_actions, map, :unvoted))
 
           %{state | votes: votes, vote_actions: vote_actions}
-        end
-      end
+        else
+          if action == :unvoted do
+            # Already unvoted, ignore further actions
+            Logger.info("User #{user_id} already unvoted map #{map}, ignoring.")
 
-    {:noreply, new_state}
+            Nostrum.Api.Interaction.create_response(interaction.id, interaction.token, %{type: 6})
+
+            state
+          else
+            # First vote
+            Logger.info("User #{user_id} voted map #{map}")
+
+            Nostrum.Api.Interaction.create_response(interaction.id, interaction.token, %{type: 6})
+
+            votes =
+              Map.update(state.votes, map, [user_id], fn voters ->
+                [user_id | voters]
+              end)
+
+            vote_actions =
+              Map.put(state.vote_actions, user_id, Map.put(user_actions, map, :voted))
+
+            %{state | votes: votes, vote_actions: vote_actions}
+          end
+        end
+
+      {:noreply, new_state}
+    else
+      Logger.info("User #{interaction.user.id} is not a player, ignoring interaction.")
+      Nostrum.Api.Interaction.create_response(interaction.id, interaction.token, %{type: 6})
+      {:noreply, state}
+    end
   end
 
   def handle_info({:event, _event}, state) do
@@ -190,6 +200,10 @@ defmodule PickupBot.Servers.MapVote do
       ],
       content: content
     }
+  end
+
+  defp eligible_to_vote?(user_id, state) do
+    user_id in state.players
   end
 
   defp mention_players(players) do
